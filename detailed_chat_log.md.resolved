@@ -1,0 +1,315 @@
+# Issue Tracker — Detailed Conversation Log
+**Date:** March 2, 2026 | **Duration:** ~2.5 hours  
+**Project:** Unico Connect Issue Tracker (Spring Boot + React)
+
+---
+
+## Phase 1: Backend Startup (08:30 – 09:00)
+
+### Step 1.1 — Explored the project structure
+- Found the backend at `c:\Users\Varun Kalyadapu\OneDrive\Desktop\Unicon-Test\issue-tracker-backend`
+- Spring Boot 3.2.3, Java 17, PostgreSQL, Lombok, WebSockets
+- Read `pom.xml`, `application.properties`, all model/service/controller/config files
+
+### Step 1.2 — First startup attempt failed
+```
+> mvnw.cmd spring-boot:run
+'C:\Program' is not recognized as an internal or external command...
+```
+**Root cause:** `JAVA_HOME` is `C:\Program Files\Common Files\Oracle\Java\javapath` — the space in "Program Files" breaks unquoted path references in `mvnw.cmd`.
+
+### Step 1.3 — Fixed mvnw.cmd
+Modified line 18 to properly quote all variables:
+```diff
+- %JAVACMD% -cp %WRAPPER_JAR% org.apache.maven.wrapper.MavenWrapperMain %*
++ "%JAVACMD%" "-Dmaven.multiModuleProjectDirectory=%MAVEN_PROJECTBASEDIR%" -cp "%WRAPPER_JAR%" org.apache.maven.wrapper.MavenWrapperMain %*
+```
+
+### Step 1.4 — Port 8080 conflict
+Backend couldn't start — port 8080 already in use by another Java process. Killed the old process with `Stop-Process`.
+
+### Step 1.5 — Backend started successfully
+Used direct PowerShell Java invocation:
+```powershell
+& "java" "-Dmaven.multiModuleProjectDirectory=$basedir" -cp "$basedir\.mvn\wrapper\maven-wrapper.jar" org.apache.maven.wrapper.MavenWrapperMain spring-boot:run
+```
+**Result:** `Started IssueTrackerApplication in 14.508 seconds` on port 8080.
+
+---
+
+## Phase 2: API Endpoint Testing (09:00 – 09:30)
+
+### Step 2.1 — GET /api/issues (List all)
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues" -Method GET
+```
+**Result:** ✅ Returned 16 issues from PostgreSQL database
+
+### Step 2.2 — POST /api/issues (Create)
+```powershell
+$body = @{ title="Test Issue from API"; description="Testing create endpoint"; project="Alpha"; priority="MEDIUM"; status="OPEN"; assignee="Alice" } | ConvertTo-Json
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues" -Method POST -Body $body -ContentType "application/json"
+```
+**Result:** ✅ Created issue with ID 60
+
+### Step 2.3 — GET /api/issues/{id} (Single)
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues/60" -Method GET
+```
+**Result:** ✅ Returned the created issue
+
+### Step 2.4 — PATCH /api/issues/{id}/status (Update)
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues/60/status" -Method PATCH -Body '{"status":"IN_PROGRESS"}' -ContentType "application/json"
+```
+**Result:** ✅ Status changed to IN_PROGRESS
+
+### Step 2.5 — DELETE /api/issues/{id}
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues/60" -Method DELETE
+```
+**Result:** ✅ 204 No Content
+
+### Step 2.6 — GET /api/issues/export (CSV)
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues/export" -Method GET
+```
+**Result:** ✅ CSV data returned
+
+### Step 2.7 — Filtering tests
+| Query | Result |
+|-------|--------|
+| `?priority=CRITICAL` | ✅ 3 issues |
+| `?status=OPEN` | ✅ 6 issues |
+| `?search=login` | ✅ 1 issue: "Login page crashes on invalid email" |
+
+### Step 2.8 — POST /api/issues/{id}/comments (Add comment)
+**First attempt failed** — used `{"content": "..."}` instead of `{"text": "..."}`.
+Checked `CommentRequestDTO.java` and found the field is `text`, not `content`.
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/issues/2/comments" -Method POST -Body '{"text":"This is a test comment"}' -ContentType "application/json"
+```
+**Result:** ✅ 201 Created
+
+### Step 2.9 — GET /api/issues/{id}/comments (List)
+**Result:** ✅ Returned the test comment
+
+### Step 2.10 — GET /api/issues/99999 (Error handling)
+**Result:** ✅ 404 Not Found with proper error message
+
+---
+
+## Phase 3: CORS Configuration Fix (09:30 – 09:45)
+
+### Problem discovered
+Backend CORS config only allowed `http://localhost:5173` (Vite default port), but the frontend was running on `http://localhost:3000`.
+
+### Files modified
+
+**CorsConfig.java** — Global CORS config:
+```diff
+- .allowedOrigins("http://localhost:5173")
++ .allowedOrigins("http://localhost:5173", "http://localhost:3000")
+```
+
+**IssueController.java** — Controller-level CORS:
+```diff
+- @CrossOrigin(origins = "http://localhost:5173")
++ @CrossOrigin(origins = { "http://localhost:5173", "http://localhost:3000" })
+```
+
+**CommentController.java** — Same change as above
+
+### Verification
+Tested with preflight (OPTIONS) and actual requests:
+```powershell
+Invoke-WebRequest -Uri "http://localhost:8080/api/issues" -Method OPTIONS -Headers @{ "Origin" = "http://localhost:3000"; "Access-Control-Request-Method" = "GET" }
+```
+**Result:** ✅ Headers returned `Access-Control-Allow-Origin: http://localhost:3000`
+
+---
+
+## Phase 4: Frontend Browser Testing (09:45 – 10:00)
+
+### Browser subagent was unavailable (503 errors) for most attempts
+Multiple attempts failed due to model capacity issues.
+
+### Successful test run
+Browser subagent successfully:
+1. Opened `http://localhost:3000/`
+2. Captured screenshot of dashboard — issues loaded from backend
+3. Clicked "New Issue" button
+4. Filled form: "Test Issue from Browser Agent" / Alpha / LOW / Alice
+5. Submitted — issue appeared in dashboard
+6. Checked console — **no CORS or JS errors**
+
+### Screenshot captured
+Dashboard: `frontend_dashboard_1772443994332.png`
+New Issue form: `click_feedback_1772444068777.png`
+
+---
+
+## Phase 5: Frontend-Backend Integration Bug Fix (14:30 – 15:20)
+
+### User report
+> "the frontend is not connected to the backend while I refresh the data is updated"
+
+### Investigation
+1. Found frontend process on port 3000 (PID 16588)
+2. Located frontend at: `C:\Users\Varun Kalyadapu\Downloads\issue-tracker-project\issue-tracker-project\issue-tracker-frontend\`
+3. Examined `api.js` — correctly configured with `baseURL: "http://localhost:8080/api"` and all endpoints
+4. **Examined `App.jsx` line 16:**
+```javascript
+const [issues, setIssues] = useState(SEED_ISSUES);  // ← HARDCODED!
+```
+
+### Root cause
+The frontend had a complete `api.js` with correct endpoints, but **no page ever imported or used it**. All 5 pages used hardcoded `SEED_ISSUES` from `constants.js` and manipulated local React state.
+
+### Fix — 5 files rewritten
+
+**App.jsx:**
+```diff
+- import { SEED_ISSUES } from "./data/constants";
++ import { getIssues } from "./services/api";
+
+- const [issues, setIssues] = useState(SEED_ISSUES);
++ const [issues, setIssues] = useState([]);
++ useEffect(() => { fetchIssues(); }, []);
++ const fetchIssues = async () => {
++   const res = await getIssues();
++   setIssues(res.data.map(i => ({ ...i, created_at: i.createdAt?.split("T")[0] })));
++ };
+```
+
+**CreateIssue.jsx:**
+```diff
+- setIssues((prev) => [issue, ...prev]);  // local only
++ await createIssue(form);                // real API POST
++ await fetchIssues();                    // reload from backend
+```
+
+**IssueDetail.jsx:**
+```diff
+- const [comments, setComments] = useState(SEED_COMMENTS[issue.id] || []);  // hardcoded
++ useEffect(() => { getComments(issue.id).then(res => setComments(res.data)); }, []);
+
+- setIssues((prev) => prev.map(...));  // local status update
++ await updateIssueStatus(issue.id, status);  // real PATCH API
+
+- setIssues((prev) => prev.filter(...));  // local delete
++ await deleteIssue(issue.id);  // real DELETE API
+
+- setComments((prev) => [...prev, localComment]);  // local add
++ await postComment(issue.id, text);  // real POST API
+```
+
+**Kanban.jsx:**
+```diff
+- setIssues((prev) => prev.map(...));  // local state on drag
++ await updateIssueStatus(dragging.id, newStatus);  // real PATCH API
+```
+
+**Dashboard.jsx:**
+```diff
+- // CSV: client-side generation
++ const res = await exportIssuesCSV();  // real GET /api/issues/export
+
+- // Simulate: fake local issue
++ await createIssue(issue);  // real POST to create an actual issue
+```
+
+---
+
+## Phase 6: Analytics Page Enhancement (15:23 – 15:26)
+
+### User request
+> "modify the dashboard section with more good bars"
+
+### Clarification
+User clarified they wanted the **Analytics** page enhanced, not the Dashboard. Reverted Dashboard changes.
+
+### Enhanced Charts.jsx with 9 new visualizations:
+1. **Key Metric Cards** — Total Issues, Resolution Rate %, Critical Open, Team Size
+2. **Status Donut Chart** — with per-status progress bars
+3. **Stacked Status Pipeline Bar** — full issue flow visual
+4. **Resolution Progress Bar** — orange→green gradient
+5. **Issues by Project** — horizontal bars with %
+6. **Issues by Priority** — horizontal bars (Critical→Low)
+7. **Project Health** — stacked status bars per project
+8. **Priority × Project Heatmap** — severity concentration grid
+9. **Team Workload** — per-assignee bars with status breakdown + "active %" label
+
+---
+
+## Phase 7: Swagger API Documentation (15:30 – 15:48)
+
+### Added springdoc-openapi to pom.xml
+```xml
+<dependency>
+    <groupId>org.springdoc</groupId>
+    <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+    <version>2.3.0</version>
+</dependency>
+```
+
+### Created OpenApiConfig.java
+- Title: "Issue Tracker API"
+- Description: "REST API for the Unico Connect Issue Tracker"
+- Version: "1.0.0"
+- Server: `http://localhost:8080`
+
+### Annotated IssueController.java
+- `@Tag(name = "Issues", description = "CRUD operations for managing issues")`
+- `@Operation` on all 6 endpoints with summaries and descriptions
+- `@ApiResponse` for 200, 201, 204, 404, 422 codes
+- `@Parameter` on filter parameters (project, priority, status, assignee, search)
+
+### Annotated CommentController.java
+- `@Tag(name = "Comments", description = "Manage comments on issues")`
+- `@Operation` on GET and POST
+- `@ApiResponse` for 200, 201, 404, 422
+
+### Compilation error encountered
+```
+CommentController.java:[34,48] cannot find symbol: method getComments(java.lang.Long)
+```
+**Fix:** Changed `getComments(issueId)` to `getCommentsByIssueId(issueId)` to match the service method name.
+
+### Backend restarted successfully
+- Swagger UI: ✅ `http://localhost:8080/swagger-ui/index.html` returns 200
+- OpenAPI JSON: ✅ `http://localhost:8080/v3/api-docs` returns all 5 paths
+
+---
+
+## Summary of All Files Modified
+
+### Backend (7 files)
+| File | Change |
+|------|--------|
+| `mvnw.cmd` | Fixed path quoting for spaces in JAVA_HOME |
+| `pom.xml` | Added springdoc-openapi-starter-webmvc-ui 2.3.0 |
+| `CorsConfig.java` | Added localhost:3000 to allowed origins |
+| `IssueController.java` | CORS fix + Swagger annotations |
+| `CommentController.java` | CORS fix + Swagger annotations + method name fix |
+| `OpenApiConfig.java` | **[NEW]** OpenAPI metadata configuration |
+
+### Frontend (5 files)
+| File | Change |
+|------|--------|
+| `App.jsx` | Fetch from API instead of SEED_ISSUES |
+| `CreateIssue.jsx` | POST to API instead of local state |
+| `IssueDetail.jsx` | PATCH/DELETE/GET comments via API |
+| `Kanban.jsx` | PATCH status on drag via API |
+| `Dashboard.jsx` | CSV export + simulate via API |
+| `Charts.jsx` | Enhanced with 9 new visualizations |
+
+---
+
+## URLs
+| Resource | URL |
+|----------|-----|
+| Frontend | http://localhost:3000 |
+| Backend API | http://localhost:8080/api/issues |
+| Swagger UI | http://localhost:8080/swagger-ui/index.html |
+| OpenAPI JSON | http://localhost:8080/v3/api-docs |
